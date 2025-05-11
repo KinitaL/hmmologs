@@ -1,0 +1,8 @@
+# This example is filled for Kunitz domain
+output_dir: ./data
+max_amount_of_proteins: 400
+domain:
+  interpro_id: IPR036880 # https://www.ebi.ac.uk/interpro/entry/InterPro/IPR036880/
+pdb_filter:
+  resolution_threshold: 3.0
+  max_residues_count: 100
