@@ -26,3 +26,7 @@ Fill the config.yaml file:
 ```shell
 python hmmologs.py 
 ```
+
+## Example
+The statistics of the model made by this script for the Kunitz domain:
+![Confusion Matrix](./assets/confusion_matrix_kunitz.png "Confusion matrix")

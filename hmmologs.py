@@ -6,12 +6,16 @@ import sys, yaml, requests
 from Bio import AlignIO
 from Bio.PDB import PDBList, PDBParser, PDBIO, Structure, Model, Chain
 
+import seaborn as sns
+
 
 UNIPROT_BASE_URL = "https://rest.uniprot.org/uniprotkb/search"
 PDBE_MAPPINGS_BASE_URL = "https://www.ebi.ac.uk/pdbe/api/mappings/interpro"
 EBI_FASTA_BASE_URL = "https://www.ebi.ac.uk/pdbe/entry/pdb"
 RCSB_BASE_URL_FOR_ALL_PDBS="https://data.rcsb.org/rest/v1/holdings/current/entry_ids"
 UNIPROT_HEADERS = {"accept": "application/json"}
+OUTPUT_LINE_TEMPLATE_ALL_STRUCTURES="Initial search space (Z)"
+OUTPUT_LINE_TEMPLATE_PASSED_STRUCTURES="Domain search space  (domZ)"
 
 
 def create_new_directory(directory):
@@ -325,6 +329,59 @@ def validate(output_dir, domain, output_name):
         shell=True,
     )
 
+def get_metrics(
+        output_dir,
+        domain,
+        random_output_name,
+):
+    TP, FP, TN, FN = 0,0,0,0
+    try:
+        total_count = extract_the_metric(
+            output_dir,
+            domain,
+            OUTPUT_LINE_TEMPLATE_ALL_STRUCTURES,
+        )
+        TP = extract_the_metric(
+            output_dir,
+            domain,
+            OUTPUT_LINE_TEMPLATE_PASSED_STRUCTURES,
+        )
+        FN = total_count - TP
+
+        total_count_of_random = extract_the_metric(
+            output_dir,
+            random_output_name,
+            OUTPUT_LINE_TEMPLATE_ALL_STRUCTURES,
+        )
+        FP = extract_the_metric(
+            output_dir,
+            random_output_name,
+            OUTPUT_LINE_TEMPLATE_PASSED_STRUCTURES,
+        )
+        TN = total_count_of_random - FP
+    except Exception as e:
+        raise Exception("Failed to extract all metrics")
+
+    return TP, FP, TN, FN
+
+def extract_the_metric(
+    output_dir,
+    filename,
+    line_beginning
+):
+    grep_line = subprocess.run(
+        f"grep \"^{line_beginning}:\" {output_dir}/validation/{filename}.output",
+        capture_output=True,
+        shell=True,
+    )
+    line = grep_line.stdout.strip()
+    if grep_line.stdout.strip():
+        parts = line.split()
+        if len(parts) < 3:
+            raise Exception("Corrupted output of hmmsearch")
+        return int(parts[4])
+    raise Exception("Corrupted output of hmmsearch")
+
 
 if __name__ == "__main__":
     # Init biopython objects
@@ -384,4 +441,21 @@ if __name__ == "__main__":
         "random",
     )
 
-    # TODO: draw a confusion matrix.
+    # Calculate metrics
+    TP, FP, TN, FN = get_metrics(
+        config['output_dir'],
+        config['domain']['interpro_id'],
+        "random",
+    )
+    precision= TP/(TP+FP)
+    recall = TP/(TP+FN)
+    f1 = 2*precision*recall/(precision+recall)
+
+    # Draw a confusion matrix
+    matrix = sns.heatmap([
+        [TP/(TP+FP+FN+TN), FP/(TP+FP+FN+TN)],
+        [FN/(TP+FP+FN+TN), TN/(TP+FP+FN+TN)],
+    ], annot=True, fmt='.2%', cmap='Blues')
+    matrix.set(xlabel=f"Precision: {round(precision,2)} Recall: {round(recall,2)} F1: {round(f1,2)}")
+    fig = matrix.get_figure()
+    fig.savefig(f"{config['output_dir']}/validation/confusion_matrix.png")
