@@ -10,6 +10,7 @@ from Bio.PDB import PDBList, PDBParser, PDBIO, Structure, Model, Chain
 UNIPROT_BASE_URL = "https://rest.uniprot.org/uniprotkb/search"
 PDBE_MAPPINGS_BASE_URL = "https://www.ebi.ac.uk/pdbe/api/mappings/interpro"
 EBI_FASTA_BASE_URL = "https://www.ebi.ac.uk/pdbe/entry/pdb"
+RCSB_BASE_URL_FOR_ALL_PDBS="https://data.rcsb.org/rest/v1/holdings/current/entry_ids"
 UNIPROT_HEADERS = {"accept": "application/json"}
 
 
@@ -243,11 +244,38 @@ def download_validation_set(output_dir, ids, fraction, domain):
     :param ids: ids of PDB files to download
     :param fraction: the percentage of the PDB files to download
     :param domain: the domain of the interest
+    :return: the amount of FASTA files downloaded
+    """
+    number = int(len(ids) * fraction)
+    create_new_directory(f"{output_dir}/validation")
+    download_fasta(
+        f"{output_dir}/validation/{domain}.fa",
+        random.sample(ids, number)
+    )
+    return number
+
+def download_validation_random_set(output_dir, number):
+    """
+    Download a set of PDB structures that are going to be used for the validation of
+    the model. For the validation we use the same amount of random structures as
+    the amount of the structures with the domain.
+    :param output_dir: the output directory
+    :param number: number of PDB files to download
     :return:
     """
-    create_new_directory(f"{output_dir}/validation")
-    ids = random.sample(ids, int(len(ids) * fraction))
-    with open(f"{output_dir}/validation/{domain}.fa", 'w') as file:
+    download_fasta(
+        f"{output_dir}/validation/random.fa",
+        random.sample(do_request(RCSB_BASE_URL_FOR_ALL_PDBS).json(), number)
+    )
+
+def download_fasta(output_file, ids):
+    """
+    Download FASTA files by PDB IDs.
+    :param ids: List of PDB IDs
+    :param output_file: output file
+    :return:
+    """
+    with open(output_file, 'w') as file:
         for id in ids:
             file.write(fetch_fasta_by_pdb_id(id))
 
@@ -284,15 +312,16 @@ def build_model(output_dir, domain):
     )
 
 
-def validate(output_dir, domain):
+def validate(output_dir, domain, output_name):
     """
     Validate the model using hmmsearch routine of the HHMER.
     :param output_dir: the output directory
     :param domain: the domain of the interest
+    :param output_name: the name of the output file
     :return:
     """
     subprocess.run(
-        f"hmmsearch {output_dir}/model/{domain}.hmm {output_dir}/validation/{domain}.fa > {output_dir}/validation/{domain}.output",
+        f"hmmsearch {output_dir}/model/{domain}.hmm {output_dir}/validation/{output_name}.fa > {output_dir}/validation/{output_name}.output",
         shell=True,
     )
 
@@ -331,7 +360,7 @@ if __name__ == "__main__":
     build_model(config['output_dir'], config['domain']['interpro_id'])
 
     # Download PDB files for validation
-    download_validation_set(
+    files_number = download_validation_set(
         config['output_dir'],
         pdb_ids,
         config['validation_set_fraction'],
@@ -342,8 +371,17 @@ if __name__ == "__main__":
     validate(
         config['output_dir'],
         config['domain']['interpro_id'],
+        config['domain']['interpro_id'],
     )
 
-    # TODO: download random set of the proteins
-    # TODO: validate the model on the random set
+    # Download random PDB files for validation
+    download_validation_random_set(config['output_dir'], files_number)
+
+    # "Validate" using random fasta files
+    validate(
+        config['output_dir'],
+        config['domain']['interpro_id'],
+        "random",
+    )
+
     # TODO: draw a confusion matrix.
