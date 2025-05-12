@@ -21,7 +21,7 @@ Fill the config.yaml file:
 - pdb_filter -> resolution_threshold: PDB structures with the resolution lower that this threshold will be discarded 
 - pdb_filter -> max_residues_count: maximum allowed number of residues in the chain
 - max_amount_of_proteins: limit in the query to Uniprot
-
+- validation_set_fraction: fraction of the proteins that will be used for validation after the model is trained
 ## Execution
 ```shell
 python hmmologs.py 

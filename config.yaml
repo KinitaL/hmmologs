@@ -5,3 +5,4 @@ domain:
 pdb_filter:
   resolution_threshold:
   max_residues_count:
+validation_set_fraction:

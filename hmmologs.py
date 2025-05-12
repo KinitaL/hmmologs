@@ -1,28 +1,33 @@
 import os
 import subprocess
+import random
 import sys, yaml, requests
+
 from Bio import AlignIO
-from Bio.PDB import PDBList, PDBParser, PDBIO, Select, Structure, Model, Chain
+from Bio.PDB import PDBList, PDBParser, PDBIO, Structure, Model, Chain
 
-UNIPROT_BASE_URL="https://rest.uniprot.org/uniprotkb/search"
-PDBE_MAPPINGS_BASE_URL="https://www.ebi.ac.uk/pdbe/api/mappings/interpro"
-HEADERS={"accept": "application/json"}
 
-class ChainSelect(Select):
-    def __init__(self, keep_chain):
-        self.keep_chain = keep_chain
-    def accept_chain(self, chain):
-        return (chain.id == self.keep_chain)
+UNIPROT_BASE_URL = "https://rest.uniprot.org/uniprotkb/search"
+PDBE_MAPPINGS_BASE_URL = "https://www.ebi.ac.uk/pdbe/api/mappings/interpro"
+EBI_FASTA_BASE_URL = "https://www.ebi.ac.uk/pdbe/entry/pdb"
+UNIPROT_HEADERS = {"accept": "application/json"}
 
-# Function to create a new directory, after checking for it's existence
+
 def create_new_directory(directory):
+    """Create a new directory.
+
+    Before create, it checks if the directory already exists and remove it.
+    """
     if os.path.isdir(directory):
-        subprocess.run(f"rm -rf {directory}", shell = True)
-        subprocess.run(f"mkdir -p {directory}", shell = True)
+        subprocess.run(f"rm -rf {directory}", shell=True)
+        subprocess.run(f"mkdir -p {directory}", shell=True)
     else:
-        subprocess.run(f"mkdir -p {directory}", shell = True)
+        subprocess.run(f"mkdir -p {directory}", shell=True)
+
 
 def build_query(domain, limit):
+    """Build a query for UniProt API.
+    """
     return {
         "query": f"(xref:interpro-{domain}) AND reviewed:true AND (database:pdb)",
         "fields": [
@@ -33,48 +38,96 @@ def build_query(domain, limit):
         "size": f"{limit}"
     }
 
-def do_request(domain, limit):
+
+def do_request(url, headers=None, params=None):
+    """
+    Do HTTP GET request.
+    :param url: URL
+    :param headers: Dictionary of HTTP Headers
+    :param params: Dictionary of query parameters
+    :return: Response object
+    """
     response = requests.get(
-        UNIPROT_BASE_URL,
-        headers=HEADERS,
-        params=build_query(domain, limit),
+        url,
+        headers=headers,
+        params=params,
     )
 
     if not response.ok:
         response.raise_for_status()
         sys.exit()
 
-    return response.json()
+    return response
+
 
 def get_ids(domain, limit):
-    data = do_request(domain, limit)
+    """
+    Obtain PDB IDs that contain the domain.
+    :param domain: the domain for a search query
+    :param limit: the limit for a search query
+    :return: the list of PDB IDs
+    """
+    data = do_request(
+        UNIPROT_BASE_URL,
+        UNIPROT_HEADERS,
+        build_query(domain, limit),
+    ).json()
 
-    # ids = []
     pdb_ids = []
     for uniprot in data["results"]:
-        # ids.append(uniprot["primaryAccession"])
         if (len(uniprot["uniProtKBCrossReferences"]) != 0 and
-            uniprot["uniProtKBCrossReferences"][0]["database"] == "PDB"):
+                uniprot["uniProtKBCrossReferences"][0]["database"] == "PDB"):
             pdb_ids.append(uniprot["uniProtKBCrossReferences"][0]["id"])
 
     return pdb_ids
 
-def get_chains(domain, pdb_id):
-    resp = requests.get(f"{PDBE_MAPPINGS_BASE_URL}/{pdb_id.lower()}")
-    if not resp.ok:
-        return set()
-    chains = []
-    for found_domain, info in resp.json().get(pdb_id.lower(), {}).get("InterPro", {}).items():
-        if found_domain != domain:
-            continue
-        for mapping in info.get("mappings", []):
-            chains.append(mapping["chain_id"])
-    return set(chains)
 
-# def download_pdb_files(ids, directory):
-#     create_new_directory(directory)
-#     for id in ids:
-#         subprocess.run(f"wget  https://files.rcsb.org/view/{id}.pdb -O {directory}/{id}.pdb", shell = True)
+def get_chains(domain, pdb_id):
+    """
+    Obtain a set of chains that contain the domain.
+    :param domain: the domain for a search query
+    :param pdb_id: the PDB ID for a search query
+    :return: the set of chains of the PDB file that contain this domain
+    """
+    try:
+       resp = do_request(f"{PDBE_MAPPINGS_BASE_URL}/{pdb_id.lower()}")
+       chains = []
+       for found_domain, info in resp.json().get(pdb_id.lower(), {}).get("InterPro", {}).items():
+           if found_domain != domain:
+               continue
+           for mapping in info.get("mappings", []):
+               chains.append(mapping["chain_id"])
+       return set(chains)
+    except Exception as e:
+        return set()
+
+
+def filter_by_resolution(pdb_file, resolution_threshold):
+    """
+    Filter PDB file by its resolution.
+    :param pdb_file: the PDB file to filter
+    :param resolution_threshold: the threshold for the resolution
+    :return: Boolean flag that says if PDB should be discarded
+    """
+    resolution_line = subprocess.run(
+        f"grep \"^REMARK   2 RESOLUTION.\" {pdb_file}",
+        capture_output=True,
+        shell=True,
+    )
+
+    line = resolution_line.stdout.strip()
+    if line:
+        parts = line.split()
+        if len(parts) > 3:
+            try:
+                resolution = float(parts[3])
+                if resolution > resolution_threshold:
+                    return True
+            except ValueError:
+                return False
+    else:
+        return False
+
 
 def download_pdb_files(
         pdbl,
@@ -84,7 +137,19 @@ def download_pdb_files(
         domain,
         output_dir,
         pdb_filter,
-    ):
+):
+    """
+    Download chains in the PDB format and filter them according to
+    constraints set in the config.
+    :param pdbl:
+    :param parser:
+    :param io:
+    :param pdb_ids: the IDs of the PDB files to download
+    :param domain: the domain of the interest
+    :param output_dir: the output directory
+    :param pdb_filter: the dictionary with constraints
+    :return:
+    """
     create_new_directory(output_dir)
     for pdb_id in sorted(pdb_ids):
         chains = get_chains(domain, pdb_id)
@@ -138,27 +203,13 @@ def download_pdb_files(
             io.set_structure(new_structure)
             io.save(out_name)
 
-def filter_by_resolution(pdb_file, resolution_threshold):
-    resolution_line = subprocess.run(
-        f"grep \"^REMARK   2 RESOLUTION.\" {pdb_file}",
-        capture_output=True,
-        shell=True,
-    )
-
-    line = resolution_line.stdout.strip()
-    if line:
-        parts = line.split()
-        if len(parts) > 3:
-            try:
-                resolution = float(parts[3])
-                if resolution > resolution_threshold:
-                    return True
-            except ValueError:
-                return False
-    else:
-        return False
 
 def align(output_dir):
+    """
+    Align the structures using MUSTANG tool (Multiple Structural Alignment).
+    :param output_dir: the output directory
+    :return:
+    """
     create_new_directory(f"{output_dir}/alignment")
 
     with open(f"{output_dir}/alignment/list.txt", 'w') as list:
@@ -168,16 +219,59 @@ def align(output_dir):
                 list.write(f"+{output_dir}/pdb/{file}\n")
 
     subprocess.run(f"mustang -f {output_dir}/alignment/list.txt -o {output_dir}/alignment/alignment -F fasta",
-                   shell = True)
+                   shell=True)
+
+
+def fetch_fasta_by_pdb_id(pdb_id):
+    """
+    Fetch FASTA file by PDB ID.
+    :param pdb_id: ID of a PDB file
+    :return:
+    """
+    try:
+        return do_request(f"{EBI_FASTA_BASE_URL}/{pdb_id.lower()}/fasta").text
+    except Exception as e:
+        raise Exception(f"Failed to fetch FASTA for {pdb_id}")
+
+
+def download_validation_set(output_dir, ids, fraction, domain):
+    """
+    Download a set of PDB structures that are going to be used for the validation of
+    the model. For the validation we use the same structures that we used to extract chains,
+    but only the subset of them (set validation_set_fraction in the config).
+    :param output_dir: the output directory
+    :param ids: ids of PDB files to download
+    :param fraction: the percentage of the PDB files to download
+    :param domain: the domain of the interest
+    :return:
+    """
+    create_new_directory(f"{output_dir}/validation")
+    ids = random.sample(ids, int(len(ids) * fraction))
+    with open(f"{output_dir}/validation/{domain}.fa", 'w') as file:
+        for id in ids:
+            file.write(fetch_fasta_by_pdb_id(id))
+
 
 def fasta_to_stockholm(output_dir):
+    """
+    Converts FASTA file to the Stockholm alignment file
+    :param output_dir: the output directory
+    :return:
+    """
     # Read the FASTA alignment
     alignment = AlignIO.read(f"{output_dir}/alignment/alignment.afasta", "fasta")
 
     # Save in Stockholm format
     AlignIO.write(alignment, f"{output_dir}/alignment/alignment.sto", "stockholm")
 
+
 def build_model(output_dir, domain):
+    """
+    Build a profile HMM using hmmbuild routine of the HHMER.
+    :param output_dir: the output directory
+    :param domain: the domain of the interest
+    :return:
+    """
     # convert to Stockholm format
     fasta_to_stockholm(output_dir)
 
@@ -189,8 +283,19 @@ def build_model(output_dir, domain):
         shell=True,
     )
 
-def annotate_domain(domain):
-    pass
+
+def validate(output_dir, domain):
+    """
+    Validate the model using hmmsearch routine of the HHMER.
+    :param output_dir: the output directory
+    :param domain: the domain of the interest
+    :return:
+    """
+    subprocess.run(
+        f"hmmsearch {output_dir}/model/{domain}.hmm {output_dir}/validation/{domain}.fa > {output_dir}/validation/{domain}.output",
+        shell=True,
+    )
+
 
 if __name__ == "__main__":
     # Init biopython objects
@@ -225,4 +330,20 @@ if __name__ == "__main__":
     # Build profile HMM
     build_model(config['output_dir'], config['domain']['interpro_id'])
 
+    # Download PDB files for validation
+    download_validation_set(
+        config['output_dir'],
+        pdb_ids,
+        config['validation_set_fraction'],
+        config['domain']['interpro_id'],
+    )
 
+    # Validate
+    validate(
+        config['output_dir'],
+        config['domain']['interpro_id'],
+    )
+
+    # TODO: download random set of the proteins
+    # TODO: validate the model on the random set
+    # TODO: draw a confusion matrix.
