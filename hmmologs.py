@@ -316,7 +316,7 @@ def build_model(output_dir, domain):
     )
 
 
-def validate(output_dir, domain, output_name):
+def validate(output_dir, domain, output_name, e_value_threshold):
     """
     Validate the model using hmmsearch routine of the HHMER.
     :param output_dir: the output directory
@@ -325,7 +325,7 @@ def validate(output_dir, domain, output_name):
     :return:
     """
     subprocess.run(
-        f"hmmsearch {output_dir}/model/{domain}.hmm {output_dir}/validation/{output_name}.fa > {output_dir}/validation/{output_name}.output",
+        f"hmmsearch -E {e_value_threshold} {output_dir}/model/{domain}.hmm {output_dir}/validation/{output_name}.fa > {output_dir}/validation/{output_name}.output",
         shell=True,
     )
 
@@ -429,6 +429,7 @@ if __name__ == "__main__":
         config['output_dir'],
         config['domain']['interpro_id'],
         config['domain']['interpro_id'],
+        config['e_value_threshold'],
     )
 
     # Download random PDB files for validation
@@ -439,6 +440,7 @@ if __name__ == "__main__":
         config['output_dir'],
         config['domain']['interpro_id'],
         "random",
+        config['e_value_threshold'],
     )
 
     # Calculate metrics

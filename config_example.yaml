@@ -7,3 +7,4 @@ pdb_filter:
   resolution_threshold: 3.0
   max_residues_count: 100
 validation_set_fraction: 0.3
+e_value_threshold: 10
