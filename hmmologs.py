@@ -17,19 +17,6 @@ UNIPROT_HEADERS = {"accept": "application/json"}
 OUTPUT_LINE_TEMPLATE_ALL_STRUCTURES="Initial search space (Z)"
 OUTPUT_LINE_TEMPLATE_PASSED_STRUCTURES="Domain search space  (domZ)"
 
-
-def create_new_directory(directory):
-    """Create a new directory.
-
-    Before create, it checks if the directory already exists and remove it.
-    """
-    if os.path.isdir(directory):
-        subprocess.run(f"rm -rf {directory}", shell=True)
-        subprocess.run(f"mkdir -p {directory}", shell=True)
-    else:
-        subprocess.run(f"mkdir -p {directory}", shell=True)
-
-
 def build_query(domain, limit):
     """Build a query for UniProt API.
     """
@@ -155,7 +142,7 @@ def download_pdb_files(
     :param pdb_filter: the dictionary with constraints
     :return:
     """
-    create_new_directory(output_dir)
+    os.makedirs(output_dir)
     for pdb_id in sorted(pdb_ids):
         chains = get_chains(domain, pdb_id)
         if len(chains) == 0:
@@ -215,7 +202,7 @@ def align(output_dir):
     :param output_dir: the output directory
     :return:
     """
-    create_new_directory(f"{output_dir}/alignment")
+    os.makedirs(f"{output_dir}/alignment")
 
     with open(f"{output_dir}/alignment/list.txt", 'w') as list:
         list.write("> .\n")
@@ -251,7 +238,7 @@ def download_validation_set(output_dir, ids, fraction, domain):
     :return: the amount of FASTA files downloaded
     """
     number = int(len(ids) * fraction)
-    create_new_directory(f"{output_dir}/validation")
+    os.makedirs(f"{output_dir}/validation")
     download_fasta(
         f"{output_dir}/validation/{domain}.fa",
         random.sample(ids, number)
@@ -307,7 +294,7 @@ def build_model(output_dir, domain):
     # convert to Stockholm format
     fasta_to_stockholm(output_dir)
 
-    create_new_directory(f"{output_dir}/model")
+    os.makedirs(f"{output_dir}/model")
 
     # build a model
     subprocess.run(
@@ -334,6 +321,13 @@ def get_metrics(
         domain,
         random_output_name,
 ):
+    """
+    Calculate metrics (True Positive, False Positive, True Negative, False Negative).
+    :param output_dir: the output directory
+    :param domain: the domain of the interest
+    :param random_output_name: the name of the hmmsearch output file (with random proteins)
+    :return:
+    """
     TP, FP, TN, FN = 0,0,0,0
     try:
         total_count = extract_the_metric(
@@ -369,6 +363,13 @@ def extract_the_metric(
     filename,
     line_beginning
 ):
+    """
+    Extract metrics from the file
+    :param output_dir: the output directory
+    :param filename: the name of the file
+    :param line_beginning: the mask for identify the line
+    :return:
+    """
     grep_line = subprocess.run(
         f"grep \"^{line_beginning}:\" {output_dir}/validation/{filename}.output",
         capture_output=True,
@@ -382,6 +383,40 @@ def extract_the_metric(
         return int(parts[4])
     raise Exception("Corrupted output of hmmsearch")
 
+def search(
+    output_dir,
+    e_value_threshold,
+    domain,
+    db_fraction,
+    db=None,
+):
+    """
+    Search for sufficient proteins in the DB using pHMM.
+    :param output_dir: the output directory
+    :param e_value_threshold: E-value threshold
+    :param domain: the domain of interest
+    :param db_fraction: percentage of DB to use
+    :param db: pass to the DB file
+    :return:
+    """
+    os.makedirs(f"{output_dir}/search", exist_ok=True)
+    # get all PDB IDs
+    resp = do_request(RCSB_BASE_URL_FOR_ALL_PDBS).json()
+    if db is None or db == "":
+        download_fasta(
+            f"{output_dir}/search/{domain}_candidates.fa",
+            random.sample(resp, int(float(db_fraction)*len(resp)))
+        )
+        db = f"{output_dir}/search/{domain}_candidates.fa"
+    subprocess.run(
+        f"hmmsearch -E {e_value_threshold} {output_dir}/model/{domain}.hmm {db} > {output_dir}/search/{domain}.output",
+        shell=True,
+    )
+    subprocess.run(
+        "awk '$1 ~ /^[0-9]/ && $1+0 < 10 { print $9 }'"+ f" {output_dir}/search/{domain}.output | grep 'pdb' > {output_dir}/search/{domain}_ids",
+        shell=True,
+    )
+
 
 if __name__ == "__main__":
     # Init biopython objects
@@ -393,10 +428,12 @@ if __name__ == "__main__":
     with open('config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
+    random.seed(config['seed'])
+
     # Get PDB identifiers from Uniprot
     pdb_ids = get_ids(
-        config['domain']['interpro_id'],
-        config['max_amount_of_proteins'],
+        config['target']['interpro_id'],
+        config['target']['structures_number_limit'],
     )
 
     # Download PDB files for chains that contain the domain
@@ -405,7 +442,7 @@ if __name__ == "__main__":
         parser,
         io,
         pdb_ids,
-        config['domain']['interpro_id'],
+        config['target']['interpro_id'],
         config['output_dir'],
         config['pdb_filter'],
     )
@@ -414,22 +451,22 @@ if __name__ == "__main__":
     align(config['output_dir'])
 
     # Build profile HMM
-    build_model(config['output_dir'], config['domain']['interpro_id'])
+    build_model(config['output_dir'], config['target']['interpro_id'])
 
     # Download PDB files for validation
     files_number = download_validation_set(
         config['output_dir'],
         pdb_ids,
-        config['validation_set_fraction'],
-        config['domain']['interpro_id'],
+        config['validation']['dataset_fraction'],
+        config['target']['interpro_id'],
     )
 
     # Validate
     validate(
         config['output_dir'],
-        config['domain']['interpro_id'],
-        config['domain']['interpro_id'],
-        config['e_value_threshold'],
+        config['target']['interpro_id'],
+        config['target']['interpro_id'],
+        config['validation']['e_value_threshold'],
     )
 
     # Download random PDB files for validation
@@ -438,17 +475,27 @@ if __name__ == "__main__":
     # "Validate" using random fasta files
     validate(
         config['output_dir'],
-        config['domain']['interpro_id'],
+        config['target']['interpro_id'],
         "random",
-        config['e_value_threshold'],
+        config['validation']['e_value_threshold'],
     )
 
     # Calculate metrics
     TP, FP, TN, FN = get_metrics(
         config['output_dir'],
-        config['domain']['interpro_id'],
+        config['target']['interpro_id'],
         "random",
     )
+
+    # Model didn't pass validation since it is not able to predict.
+    if TP == 0:
+        print("""
+        hmmsearch routine returned 0 correctly predicted structures.
+        Something is wrong with the model or config. One of the possible reasons
+        - E-value threshold is too string, check your config.
+        """)
+        sys.exit(1)
+
     precision= TP/(TP+FP)
     recall = TP/(TP+FN)
     f1 = 2*precision*recall/(precision+recall)
@@ -461,3 +508,13 @@ if __name__ == "__main__":
     matrix.set(xlabel=f"Precision: {round(precision,2)} Recall: {round(recall,2)} F1: {round(f1,2)}")
     fig = matrix.get_figure()
     fig.savefig(f"{config['output_dir']}/validation/confusion_matrix.png")
+
+    # Search
+    if config['search']['do']:
+        search(
+            config['output_dir'],
+            config['search']['e_value_threshold'],
+            config['target']['interpro_id'],
+            config['search']['db_fraction'],
+            config['search']['db']
+        )
