@@ -142,7 +142,7 @@ def download_pdb_files(
     :param pdb_filter: the dictionary with constraints
     :return:
     """
-    os.makedirs(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
     for pdb_id in sorted(pdb_ids):
         chains = get_chains(domain, pdb_id)
         if len(chains) == 0:
@@ -202,7 +202,7 @@ def align(output_dir):
     :param output_dir: the output directory
     :return:
     """
-    os.makedirs(f"{output_dir}/alignment")
+    os.makedirs(f"{output_dir}/alignment", exist_ok=True)
 
     with open(f"{output_dir}/alignment/list.txt", 'w') as list:
         list.write("> .\n")
@@ -238,7 +238,7 @@ def download_validation_set(output_dir, ids, fraction, domain):
     :return: the amount of FASTA files downloaded
     """
     number = int(len(ids) * fraction)
-    os.makedirs(f"{output_dir}/validation")
+    os.makedirs(f"{output_dir}/validation", exist_ok=True)
     download_fasta(
         f"{output_dir}/validation/{domain}.fa",
         random.sample(ids, number)
@@ -294,7 +294,7 @@ def build_model(output_dir, domain):
     # convert to Stockholm format
     fasta_to_stockholm(output_dir)
 
-    os.makedirs(f"{output_dir}/model")
+    os.makedirs(f"{output_dir}/model", exist_ok=True)
 
     # build a model
     subprocess.run(
